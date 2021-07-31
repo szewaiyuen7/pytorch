@@ -906,13 +906,19 @@ TORCH_IMPL_FUNC(log_softmax_cuda_out) (
   host_softmax<LogSoftMaxForwardEpilogue,true>(input, dim, half_to_float, output);
 }
 
-Tensor log_softmax_backward_cuda(const Tensor &grad, const Tensor &output, int64_t dim, const Tensor &input){
+TORCH_IMPL_FUNC(log_softmax_backward_cuda_out) (
+  const Tensor& grad,
+  const Tensor& output,
+  int64_t dim,
+  const Tensor& input,
+  const Tensor& grad_input) {
   bool half_to_float = grad.scalar_type() != input.scalar_type();
   if (half_to_float) {
      TORCH_CHECK((grad.scalar_type() == ScalarType::Float && input.scalar_type() == ScalarType::Half),
                  "expected input and grad types to match, or input to be at::Half and grad to be at::Float");
   }
-  return host_softmax_backward<LogSoftMaxBackwardEpilogue,true>(grad, output, dim, half_to_float);
+  auto res = host_softmax_backward<LogSoftMaxBackwardEpilogue,true>(grad, output, dim, half_to_float);
+  grad_input.copy_(res);
 }
 
 TORCH_IMPL_FUNC(softmax_cuda_out) (
@@ -931,5 +937,6 @@ Tensor softmax_backward_cuda(const Tensor &grad, const Tensor &output, int64_t d
   Tensor tmp = grad * output;
   return host_softmax_backward<SoftMaxBackwardEpilogue,false>(tmp, output, dim, half_to_float);
 }
+
 }
 }

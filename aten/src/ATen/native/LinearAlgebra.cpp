@@ -2021,29 +2021,29 @@ Tensor mexp(const Tensor& a, bool compute_highest_degree_approx = false) {
 // Mathias, Roy.
 // A Chain Rule for Matrix Functions and Applications.
 // SIAM J. Matrix Anal. Appl. 17 (1996): 610-620.
-//
-template <typename func_t>
-Tensor backward_analytic_function_of_a_matrix(
-    const Tensor& self, const Tensor& grad,
-    const func_t& function_of_a_matrix
-  ) {
-  auto self_transposed = self.transpose(-2, -1).conj();
-  auto self_transposed_sizes = self_transposed.sizes().vec();
-  self_transposed_sizes[self.dim() - 2] <<= 1;
-  self_transposed_sizes[self.dim() - 1] <<= 1;
 
-  auto n = self_transposed.size(-1);
-  auto meta_grad = at::zeros(self_transposed_sizes, grad.options());
-  meta_grad.narrow(-2, 0, n).narrow(-1, 0, n).copy_(self_transposed);
-  meta_grad.narrow(-2, n, n).narrow(-1, n, n).copy_(self_transposed);
+template <typename func_t>
+Tensor differential_analytic_matrix_function(
+    const Tensor& self, const Tensor& grad,
+    const func_t& matrix_function,
+    const bool backward_ad // Choose between forward or reverse AD
+  ) {
+  // Given an analytic matrix function, this computes the differential (forward AD)
+  // or the adjoint of the differential (backward AD)
+  auto A = backward_ad ? self.transpose(-2, -1).conj() : self;
+  auto meta_grad_sizes = A.sizes().vec();
+  meta_grad_sizes[A.dim() - 2] *= 2;
+  meta_grad_sizes[A.dim() - 1] *= 2;
+
+  auto n = A.size(-1);
+  auto meta_grad = at::zeros(meta_grad_sizes, grad.options());
+  meta_grad.narrow(-2, 0, n).narrow(-1, 0, n).copy_(A);
+  meta_grad.narrow(-2, n, n).narrow(-1, n, n).copy_(A);
   meta_grad.narrow(-2, 0, n).narrow(-1, n, n).copy_(grad);
 
-  auto grad_input = function_of_a_matrix(meta_grad)
-    .narrow(-2, 0, n).narrow(-1, n, n);
-  return grad_input;
+  return matrix_function(meta_grad).narrow(-2, 0, n).narrow(-1, n, n);
 }
-
-};
+}; // end anon namespace
 
 // Computes the matrix exponential for a given batch of squared matrices.
 // The implementaion is based on:
@@ -2052,34 +2052,35 @@ Tensor backward_analytic_function_of_a_matrix(
 // Computing the Matrix Exponential with an Optimized Taylor Polynomial Approximation.
 // Mathematics 2019, 7, 1174.
 //
-Tensor matrix_exp(const Tensor& a) {
-  TORCH_CHECK(a.dim() >= 2
-          && (at::isFloatingType(a.scalar_type())
-           || at::isComplexType(a.scalar_type())),
-              "matrix_exp(", a.scalar_type(), "{", a.sizes(), "}): expected a tensor "
-              "of floating or complex types with dim at least 2");
-  TORCH_CHECK(a.size(-1) == a.size(-2),
-              "matrix_exp(", a.scalar_type(), "{", a.sizes(), "}): expected a tensor "
-              "of squared matrices");
+Tensor linalg_matrix_exp(const Tensor& a) {
+  squareCheckInputs(a);
+  TORCH_CHECK((at::isFloatingType(a.scalar_type()) || at::isComplexType(a.scalar_type())),
+              "Expected a floating point or complex tensor as input. Got: ", a.scalar_type());
 
   NoTF32Guard disable_tf32;
 
-  if (a.size(-1) == 1) {
+  // Trivial cases
+  const auto n = a.size(-1);
+  if (n == 0) {
+    return a.clone();
+  } else if (n == 1) {
     return a.exp();
+  } else{
+    return at::native::mexp(a);
   }
-
-  return mexp(a);
 }
 
-Tensor matrix_exp_backward(const Tensor& self, const Tensor& grad) {
+// Alias
+Tensor matrix_exp(const Tensor& a) {
+  return at::linalg_matrix_exp(a);
+}
+
+Tensor linalg_matrix_exp_backward(const Tensor& self, const Tensor& grad, const bool backward_ad) {
   NoTF32Guard disable_tf32;
-  return backward_analytic_function_of_a_matrix(
-    self, grad,
-    [](const Tensor& a) {
-      return a.matrix_exp();
-    }
-  );
+
+  return differential_analytic_matrix_function(self, grad, at::linalg_matrix_exp, /* backward_ad */ backward_ad);
 }
+
 
 Tensor frobenius_norm(const Tensor& self) {
   return at::norm(self);
